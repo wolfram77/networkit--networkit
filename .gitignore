@@ -9,6 +9,7 @@ plots
 *.dot$
 tracelog*
 *.json
+*.log
 *.csv
 scripts/SparsificationEvaluation/input/
 scripts/SparsificationEvaluation/output/
