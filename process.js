@@ -1,6 +1,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const readline = require('readline');
 
 const RGRAPH = /^Reading graph from file:\s*.*\/(.*?)\.mtx\.elist/m;
 const RORDER = /^Nodes: (.+?), Edges: (.+)/m;
@@ -92,12 +93,29 @@ function processCsv(data) {
 
 
 
+// HEADER LINES
+// ------------
+
+// Count the number of header lines in a MatrixMarket file.
+async function headerLines(pth) {
+  var a  = 0;
+  var rl = readline.createInterface({input: fs.createReadStream(pth)});
+  for await (var line of rl) {
+    if (line[0]==='%') ++a;
+    else break;
+  }
+  return a+1;  // +1 for the row/column count line
+}
+
+
+
+
 // MAIN
 // ----
 
-function main(cmd, log, out) {
-  var data = readLog(log);
-  if (path.extname(out)==='') cmd += '-dir';
+async function main(cmd, inp, out) {
+  var data = cmd==='csv'? readLog(inp) : '';
+  if (out && path.extname(out)==='') cmd += '-dir';
   switch (cmd) {
     case 'csv':
       var rows = processCsv(data);
@@ -106,6 +124,10 @@ function main(cmd, log, out) {
     case 'csv-dir':
       for (var [graph, rows] of data)
         writeCsv(path.join(out, graph+'.csv'), rows);
+      break;
+    case 'header-lines':
+      var lines = await headerLines(inp);
+      console.log(lines);
       break;
     default:
       console.error(`error: "${cmd}"?`);

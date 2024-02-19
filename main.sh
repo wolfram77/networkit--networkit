@@ -1,4 +1,14 @@
 #!/usr/bin/env bash
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=64
+#SBATCH --exclusive
+#SBATCH --job-name slurm
+#SBATCH --output=slurm.out
+# source scl_source enable gcc-toolset-11
+# module load hpcx-2.7.0/hpcx-ompi
+# module load openmpi/4.1.5
 src="networkit--networkit"
 out="$HOME/Logs/$src$1.log"
 ulimit -s unlimited
@@ -7,30 +17,32 @@ printf "" > "$out"
 # Download source code
 if [[ "$DOWNLOAD" != "0" ]]; then
   rm -rf $src
-  git clone --depth=1 --recursive https://github.com/wolfram77/$src
-  rm -rf $src/extlibs
-  rm -rf $src/extrafiles
-  rm -rf $src/include
-  rm -rf $src/networkit
-  rm -rf $src/MANIFEST.in
-  rm -rf $src/networkit.pc
-  rm -rf $src/pyproject.toml
-  rm -rf $src/requirements.txt
-  rm -rf $src/setup.py
-  rm -rf $src/version.py
+  git clone --depth=1 --recursive https://github.com/wolfram77/$src -b for-rak-communities-openmp
+  cd $src
+  git checkout for-rak-communities-openmp
+  rm -rf extlibs
+  rm -rf extrafiles
+  rm -rf include
+  rm -rf networkit
+  rm -rf MANIFEST.in
+  rm -rf networkit.pc
+  rm -rf pyproject.toml
+  rm -rf requirements.txt
+  rm -rf setup.py
+  rm -rf version.py
 fi
-cd $src
 
 # Build
 # make -j32
 
 # Convert graph to edgelist, run Networkit PLP, and clean up
 runNetworkit() {
-  stdbuf --output=L printf "Converting $1 to $1.elist ...\n" | tee -a "$out"
+  stdbuf --output=L printf "Converting $1 to $1.elist ...\n"   | tee -a "$out"
   lines="$(node process.js header-lines "$1")"
   tail -n +$((lines+1)) "$1" > "$1.elist"
-  stdbuf --output=L python3 main.py "$1.elist"          2>&1 | tee -a "$out"
-  stdbuf --output=L printf "\n\n"                            | tee -a "$out"
+  stdbuf --output=L printf "Running Networkit PLP on $1 ...\n" | tee -a "$out"
+  stdbuf --output=L python3 main.py "$1.elist" "$1.clstr" 2>&1 | tee -a "$out"
+  stdbuf --output=L printf "\n\n"                              | tee -a "$out"
   rm -rf "$1.elist"
 }
 

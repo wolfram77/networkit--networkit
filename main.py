@@ -32,3 +32,12 @@ for t in timing:
     total_time += t
 print("PLP: Runtime: {}ms, Modularity: {}".format(total_time, modularity))
 print("Total time: {}".format(stop - start))
+
+# Save community memberships to file
+print("Number of communities: {}".format(partition.numberOfSubsets()))
+comm = os.path.expanduser(sys.argv[2])
+print("Saving communities to file {} ...".format(comm))
+with open(comm, "w") as f:
+  vector = partition.getVector()
+  for i in range(len(vector)):
+    f.write("{} {}\n".format(i, vector[i]))
