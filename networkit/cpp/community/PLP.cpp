@@ -13,6 +13,98 @@
 #include <networkit/auxiliary/Timer.hpp>
 #include <networkit/community/PLP.hpp>
 
+#include <cstdint>
+#include <cstring>
+#include <cstdio>
+#include <atomic>
+
+
+
+
+/** Memory usage structure for Linux systems. */
+typedef struct {
+    int64_t vmPeak; // Peak virtual memory size
+    int64_t vmSize; // Current virtual memory size
+    int64_t vmHwm;  // High water mark of virtual memory size
+    int64_t vmRss;  // Resident set size (physical memory used)
+} MemoryUsage;
+
+
+/**
+ * Measure the memory usage of the current process.
+ * @returns memory usage in gigabytes
+ */
+inline MemoryUsage measureMemoryUsage() {
+  char buf[128]; int read = 0;
+  FILE *file = fopen("/proc/self/status", "r");
+  MemoryUsage usage = {0, 0, 0, 0};
+  while  (fgets(buf, 128, file)) {
+    if (sscanf(buf, "VmPeak:%ld kB", &usage.vmPeak) == 1) { ++read; continue;}
+    if (sscanf(buf, "VmSize:%ld kB", &usage.vmSize) == 1) { ++read; continue;}
+    if (sscanf(buf, "VmHWM:%ld kB",  &usage.vmHwm)  == 1) { ++read; continue;}
+    if (sscanf(buf, "VmRSS:%ld kB",  &usage.vmRss)  == 1) { ++read; continue;}
+  }
+  fclose(file);
+  if (read != 4) printf("ERROR: Only %d/4 memory usage values read from /proc/self/status\n", read);
+  return usage;
+}
+
+
+/**
+ * Measure the memory usage of the current process.
+ * @param vmPeak Peak virtual memory size
+ * @param vmSize Current virtual memory size
+ * @param vmHwm High water mark of virtual memory size
+ * @param vmRss Resident set size (physical memory used)
+ */
+inline void measureMemoryUsageW(std::atomic<int64_t>& vmPeak, std::atomic<int64_t>& vmSize, std::atomic<int64_t>& vmHwm, std::atomic<int64_t>& vmRss) {
+  char buf[128]; int read = 0;
+  FILE *file = fopen("/proc/self/status", "r");
+  while (fgets(buf, 128, file)) {
+    if (sscanf(buf, "VmPeak:%ld kB", &vmPeak) == 1) { ++read; continue;}
+    if (sscanf(buf, "VmSize:%ld kB", &vmSize) == 1) { ++read; continue;}
+    if (sscanf(buf, "VmHWM:%ld kB", &vmHwm) == 1) { ++read; continue;}
+    if (sscanf(buf, "VmRSS:%ld kB", &vmRss) == 1) { ++read; continue;}
+  }
+  fclose(file);
+  if (read != 4) printf("ERROR: Only %d/4 memory usage values read from /proc/self/status\n", read);
+}
+
+
+/**
+ * Update the memory usage of the current process (to the maximum).
+ * @param vmPeak Peak virtual memory size
+ * @param vmSize Current virtual memory size
+ * @param vmHwm High water mark of virtual memory size
+ * @param vmRss Resident set size (physical memory used)
+ */
+inline void updateMemoryUsageU(std::atomic<int64_t>& vmPeak, std::atomic<int64_t>& vmSize, std::atomic<int64_t>& vmHwm, std::atomic<int64_t>& vmRss) {
+  MemoryUsage usage = measureMemoryUsage();
+  while (1) {
+    int64_t vmPeakOld = vmPeak.load();
+    if (usage.vmPeak <= vmPeakOld) break;
+    if (vmPeak.compare_exchange_strong(vmPeakOld, usage.vmPeak)) break;
+  }
+  while (1) {
+    int64_t vmSizeOld = vmSize.load();
+    if (usage.vmSize <= vmSizeOld) break;
+    if (vmSize.compare_exchange_strong(vmSizeOld, usage.vmSize)) break;
+  }
+  while (1) {
+    int64_t vmHwmOld = vmHwm.load();
+    if (usage.vmHwm <= vmHwmOld) break;
+    if (vmHwm.compare_exchange_strong(vmHwmOld, usage.vmHwm)) break;
+  }
+  while (1) {
+    int64_t vmRssOld = vmRss.load();
+    if (usage.vmRss <= vmRssOld) break;
+    if (vmRss.compare_exchange_strong(vmRssOld, usage.vmRss)) break;
+  }
+}
+
+
+
+
 namespace NetworKit {
 
 PLP::PLP(const Graph &G, count theta, count maxIterations)
@@ -22,6 +114,14 @@ PLP::PLP(const Graph &G, const Partition &baseClustering, count theta)
     : CommunityDetectionAlgorithm(G, baseClustering), updateThreshold(theta) {}
 
 void PLP::run() {
+    std::atomic<int64_t> vmPeak(0), vmSize(0), vmHwm(0), vmRss(0);
+    measureMemoryUsageW(vmPeak, vmSize, vmHwm, vmRss);
+    printf("Memory usage in PLP: VmPeak %8.4f GB, VmSize %8.4f GB, VmHwm %8.4f GB, VmRss %8.4f GB (initial)\n",
+        vmPeak / (1024.0 * 1024.0),
+        vmSize / (1024.0 * 1024.0),
+        vmHwm / (1024.0 * 1024.0),
+        vmRss / (1024.0 * 1024.0)
+    );
     if (hasRun) {
         throw std::runtime_error("The algorithm has already run on the graph.");
     }
@@ -105,6 +205,9 @@ void PLP::run() {
             }
         });
 
+        // Update memory usage.
+        updateMemoryUsageU(vmPeak, vmSize, vmHwm, vmRss);
+
         // for each while loop iteration...
 
         runtime.stop();
@@ -114,6 +217,12 @@ void PLP::run() {
 
     } // end while
     hasRun = true;
+    printf("Memory usage in PLP: VmPeak %8.4f GB, VmSize %8.4f GB, VmHwm %8.4f GB, VmRss %8.4f GB (final)\n",
+        vmPeak / (1024.0 * 1024.0),
+        vmSize / (1024.0 * 1024.0),
+        vmHwm / (1024.0 * 1024.0),
+        vmRss / (1024.0 * 1024.0)
+    );
 }
 
 void PLP::setUpdateThreshold(count th) {

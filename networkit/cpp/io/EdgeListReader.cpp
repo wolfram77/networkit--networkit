@@ -161,7 +161,8 @@ Graph EdgeListReader::read(std::string_view path) {
         ++it;
     }
 
-    graph.shrinkToFit();
+    printf("NOTE: Avoiding shrinkToFit() allowing new memory to be requested from the OS\n");
+    // graph.shrinkToFit();
     return graph;
 }
 
