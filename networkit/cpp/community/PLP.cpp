@@ -13,32 +13,6 @@
 #include <networkit/auxiliary/Timer.hpp>
 #include <networkit/community/PLP.hpp>
 
-#include <cstdint>
-#include <cstring>
-#include <cstdio>
-#include <atomic>
-
-
-/**
- * Measure the memory usage of the current process.
- * @returns memory usage in gigabytes
- */
-inline float measureMemoryUsage() {
-  char buf[128];
-  FILE *file = fopen("/proc/self/status", "r");
-  size_t rss = 0;
-  while  (fgets(buf, 128, file)) {
-    if (strncmp(buf, "VmRSS:", 6) != 0) continue;
-    if (sscanf (buf, "VmRSS: %ld kB", &rss) != 1) { rss = 0; break; }
-    break;
-  }
-  fclose(file);
-  return rss / (1024.0f * 1024.0f);
-}
-
-
-
-
 namespace NetworKit {
 
 PLP::PLP(const Graph &G, count theta, count maxIterations)
@@ -48,8 +22,6 @@ PLP::PLP(const Graph &G, const Partition &baseClustering, count theta)
     : CommunityDetectionAlgorithm(G, baseClustering), updateThreshold(theta) {}
 
 void PLP::run() {
-    std::atomic<float> memoryUsage = measureMemoryUsage();
-    printf("Memory usage (in PLP initial): %8.4f GB\n", memoryUsage.load());
     if (hasRun) {
         throw std::runtime_error("The algorithm has already run on the graph.");
     }
@@ -131,17 +103,6 @@ void PLP::run() {
             } else {
                 activeNodes[v] = false;
             }
-            // Update memory usage.
-            float memoryUsageTh  = measureMemoryUsage();
-            float memoryUsageOld = memoryUsage.load();
-            while (memoryUsageTh > memoryUsageOld) {
-                bool ok = memoryUsage.compare_exchange_strong(memoryUsageOld, memoryUsageTh);
-                if  (ok) {
-                    // printf("Memory usage (in PLP loop): %8.4f GB\n", memoryUsageTh);
-                    break;
-                }
-                memoryUsageOld = memoryUsage.load();
-            }
         });
 
         // for each while loop iteration...
@@ -153,8 +114,6 @@ void PLP::run() {
 
     } // end while
     hasRun = true;
-    printf("Memory usage (in PLP final): %8.4f GB\n", measureMemoryUsage());
-    printf("Max Memory usage (in PLP final): %8.4f GB\n", memoryUsage.load());
 }
 
 void PLP::setUpdateThreshold(count th) {

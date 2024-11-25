@@ -19,9 +19,9 @@ printf "" > "$out"
 # Download source code
 if [[ "$DOWNLOAD" != "0" ]]; then
   rm -rf $src
-  git clone --depth=1 --recursive https://github.com/wolfram77/$src -b for-rak-lowmem-communities-cuda
+  git clone --depth=1 --recursive https://github.com/wolfram77/$src -b rak-lowmem-communities-cuda
   cd $src
-  git checkout for-rak-lowmem-communities-cuda
+  git checkout rak-lowmem-communities-cuda
 fi
 
 # Build
