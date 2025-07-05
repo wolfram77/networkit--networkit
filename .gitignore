@@ -1,3 +1,7 @@
+# Generated files
+*.log
+*.csv
+
 *.trace
 *.mk
 lamg-2.2-2

@@ -1,5 +1,97 @@
 #include <networkit/community/ParallelLeiden.hpp>
 
+#include <cstdint>
+#include <cstring>
+#include <cstdio>
+#include <atomic>
+
+
+
+
+/** Memory usage structure for Linux systems. */
+typedef struct {
+    int64_t vmPeak; // Peak virtual memory size
+    int64_t vmSize; // Current virtual memory size
+    int64_t vmHwm;  // High water mark of virtual memory size
+    int64_t vmRss;  // Resident set size (physical memory used)
+} MemoryUsage;
+
+
+/**
+ * Measure the memory usage of the current process.
+ * @returns memory usage in gigabytes
+ */
+inline MemoryUsage measureMemoryUsage() {
+  char buf[128]; int read = 0;
+  FILE *file = fopen("/proc/self/status", "r");
+  MemoryUsage usage = {0, 0, 0, 0};
+  while  (fgets(buf, 128, file)) {
+    if (sscanf(buf, "VmPeak:%ld kB", &usage.vmPeak) == 1) { ++read; continue;}
+    if (sscanf(buf, "VmSize:%ld kB", &usage.vmSize) == 1) { ++read; continue;}
+    if (sscanf(buf, "VmHWM:%ld kB",  &usage.vmHwm)  == 1) { ++read; continue;}
+    if (sscanf(buf, "VmRSS:%ld kB",  &usage.vmRss)  == 1) { ++read; continue;}
+  }
+  fclose(file);
+  if (read != 4) printf("ERROR: Only %d/4 memory usage values read from /proc/self/status\n", read);
+  return usage;
+}
+
+
+/**
+ * Measure the memory usage of the current process.
+ * @param vmPeak Peak virtual memory size
+ * @param vmSize Current virtual memory size
+ * @param vmHwm High water mark of virtual memory size
+ * @param vmRss Resident set size (physical memory used)
+ */
+inline void measureMemoryUsageW(std::atomic<int64_t>& vmPeak, std::atomic<int64_t>& vmSize, std::atomic<int64_t>& vmHwm, std::atomic<int64_t>& vmRss) {
+  char buf[128]; int read = 0;
+  FILE *file = fopen("/proc/self/status", "r");
+  while (fgets(buf, 128, file)) {
+    if (sscanf(buf, "VmPeak:%ld kB", &vmPeak) == 1) { ++read; continue;}
+    if (sscanf(buf, "VmSize:%ld kB", &vmSize) == 1) { ++read; continue;}
+    if (sscanf(buf, "VmHWM:%ld kB", &vmHwm) == 1) { ++read; continue;}
+    if (sscanf(buf, "VmRSS:%ld kB", &vmRss) == 1) { ++read; continue;}
+  }
+  fclose(file);
+  if (read != 4) printf("ERROR: Only %d/4 memory usage values read from /proc/self/status\n", read);
+}
+
+
+/**
+ * Update the memory usage of the current process (to the maximum).
+ * @param vmPeak Peak virtual memory size
+ * @param vmSize Current virtual memory size
+ * @param vmHwm High water mark of virtual memory size
+ * @param vmRss Resident set size (physical memory used)
+ */
+inline void updateMemoryUsageU(std::atomic<int64_t>& vmPeak, std::atomic<int64_t>& vmSize, std::atomic<int64_t>& vmHwm, std::atomic<int64_t>& vmRss) {
+  MemoryUsage usage = measureMemoryUsage();
+  while (1) {
+    int64_t vmPeakOld = vmPeak.load();
+    if (usage.vmPeak <= vmPeakOld) break;
+    if (vmPeak.compare_exchange_strong(vmPeakOld, usage.vmPeak)) break;
+  }
+  while (1) {
+    int64_t vmSizeOld = vmSize.load();
+    if (usage.vmSize <= vmSizeOld) break;
+    if (vmSize.compare_exchange_strong(vmSizeOld, usage.vmSize)) break;
+  }
+  while (1) {
+    int64_t vmHwmOld = vmHwm.load();
+    if (usage.vmHwm <= vmHwmOld) break;
+    if (vmHwm.compare_exchange_strong(vmHwmOld, usage.vmHwm)) break;
+  }
+  while (1) {
+    int64_t vmRssOld = vmRss.load();
+    if (usage.vmRss <= vmRssOld) break;
+    if (vmRss.compare_exchange_strong(vmRssOld, usage.vmRss)) break;
+  }
+}
+
+
+
+
 namespace NetworKit {
 ParallelLeiden::ParallelLeiden(const Graph &graph, int iterations, bool randomize, double gamma)
     : CommunityDetectionAlgorithm(graph), gamma(gamma), numberOfIterations(iterations),
@@ -9,6 +101,14 @@ ParallelLeiden::ParallelLeiden(const Graph &graph, int iterations, bool randomiz
 }
 
 void ParallelLeiden::run() {
+    std::atomic<int64_t> vmPeak(0), vmSize(0), vmHwm(0), vmRss(0);
+    measureMemoryUsageW(vmPeak, vmSize, vmHwm, vmRss);
+    printf("Memory usage in ParallelLeiden: VmPeak %8.4f GB, VmSize %8.4f GB, VmHwm %8.4f GB, VmRss %8.4f GB (initial)\n",
+        vmPeak / (1024.0 * 1024.0),
+        vmSize / (1024.0 * 1024.0),
+        vmHwm / (1024.0 * 1024.0),
+        vmRss / (1024.0 * 1024.0)
+    );
     if (VECTOR_OVERSIZE < 1) {
         throw std::invalid_argument("VECTOR_OVERSIZE cant be smaller than 1");
     }
@@ -24,13 +124,13 @@ void ParallelLeiden::run() {
         calculateVolumes(*currentGraph);
         do {
             handler.assureRunning();
-            parallelMove(*currentGraph);
+            parallelMove(*currentGraph, vmPeak, vmSize, vmHwm, vmRss);
             // If each community consists of exactly one node we're done, i.e. when |V(G)| = |P|
             if (currentGraph->numberOfNodes() != result.numberOfSubsets()) {
                 break;
             }
             handler.assureRunning();
-            refined = parallelRefine(*currentGraph);
+            refined = parallelRefine(*currentGraph, vmPeak, vmSize, vmHwm, vmRss);
             handler.assureRunning();
             ParallelPartitionCoarsening ppc(*currentGraph, refined); // Aggregate graph
             ppc.run();
@@ -49,8 +149,17 @@ void ParallelLeiden::run() {
         } while (true);
         flattenPartition();
         INFO("Leiden iteration done, took ", totalTime.elapsedTag(), "so far");
+
+        // Update memory usage.
+        updateMemoryUsageU(vmPeak, vmSize, vmHwm, vmRss);
     } while (changed && numberOfIterations > 0);
     hasRun = true;
+    printf("Memory usage in ParallelLeiden: VmPeak %8.4f GB, VmSize %8.4f GB, VmHwm %8.4f GB, VmRss %8.4f GB (final)\n",
+        vmPeak / (1024.0 * 1024.0),
+        vmSize / (1024.0 * 1024.0),
+        vmHwm / (1024.0 * 1024.0),
+        vmRss / (1024.0 * 1024.0)
+    );
 }
 
 void ParallelLeiden::calculateVolumes(const Graph &graph) {
@@ -114,7 +223,7 @@ void ParallelLeiden::flattenPartition() {
     TRACE("Flattening partition took " + timer.elapsedTag());
 }
 
-void ParallelLeiden::parallelMove(const Graph &graph) {
+void ParallelLeiden::parallelMove(const Graph &graph, std::atomic<int64_t> &vmPeak, std::atomic<int64_t> &vmSize, std::atomic<int64_t> &vmHwm, std::atomic<int64_t> &vmRss) {
     DEBUG("Local Moving : ", graph.numberOfNodes(), " Nodes ");
     std::vector<count> moved(omp_get_max_threads(), 0);
     std::vector<count> totalNodesPerThread(omp_get_max_threads(), 0);
@@ -288,6 +397,9 @@ void ParallelLeiden::parallelMove(const Graph &graph) {
                 }
             }
 
+            // Update memory usage.
+            updateMemoryUsageU(vmPeak, vmSize, vmHwm, vmRss);
+
             // queue check/wait
             // 3 cases : newnodes not empty -> continue, newnodes empty & queue not empty ->  pop
             // queue, both empty -> increment waiting, if waiting < #threads wait, else done notify
@@ -342,7 +454,7 @@ void ParallelLeiden::parallelMove(const Graph &graph) {
     }
 }
 
-Partition ParallelLeiden::parallelRefine(const Graph &graph) {
+Partition ParallelLeiden::parallelRefine(const Graph &graph, std::atomic<int64_t> &vmPeak, std::atomic<int64_t> &vmSize, std::atomic<int64_t> &vmHwm, std::atomic<int64_t> &vmRss) {
     Partition refined(graph.numberOfNodes());
     refined.allToSingletons();
     DEBUG("Starting refinement with ", result.numberOfSubsets(), " partitions");
@@ -529,6 +641,9 @@ Partition ParallelLeiden::parallelRefine(const Graph &graph) {
             locks[u].unlock();
         }
     }
+
+    // Update memory usage.
+    updateMemoryUsageU(vmPeak, vmSize, vmHwm, vmRss);
 
     DEBUG("Ending refinement with ", refined.numberOfSubsets(), " partitions");
     return refined;

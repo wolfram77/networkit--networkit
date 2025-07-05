@@ -68,9 +68,9 @@ private:
 
     void calculateVolumes(const Graph &graph);
 
-    void parallelMove(const Graph &graph);
+    void parallelMove(const Graph &graph, std::atomic<int64_t> &vmPeak, std::atomic<int64_t> &vmSize, std::atomic<int64_t> &vmHwm, std::atomic<int64_t> &vmRss);
 
-    Partition parallelRefine(const Graph &graph);
+    Partition parallelRefine(const Graph &graph, std::atomic<int64_t> &vmPeak, std::atomic<int64_t> &vmSize, std::atomic<int64_t> &vmHwm, std::atomic<int64_t> &vmRss);
 
     double inverseGraphVolume; // 1/vol(V)
 
